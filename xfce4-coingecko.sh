@@ -16,9 +16,22 @@ function alert_once()
   message="${1}"; shift
   state_filename="${1}"; shift
 
-  if [[ "x$(cat "${state_filename}")" != "x$(date '+%F')" ]]; then
+  if [[ "x$(cat "${state_filename}" 2> /dev/null)" != "x$(date '+%F')" ]]; then
     date '+%F' > "${state_filename}"
     notify-send --icon 'dialog-warning' "${message}"
+  fi
+}
+
+function coingecko()
+{
+  url="${1}"; shift
+  filename="${1}"; shift
+
+  curl --silent "https://api.coingecko.com/api/v3/${url}" > "${filename}"
+  fetch_error=$(_jq '.status.error_message' "${filename}")
+  if [[ "x${fetch_error}" != 'xnull' && "x${fetch_error}" != 'x' ]]; then
+    rm "${filename}"
+    return 1
   fi
 }
 
@@ -27,12 +40,8 @@ function get_token_list()
   filename="${1}"; shift
 
   if [[ ! -f "${filename}" ]]; then
-    curl --silent "https://api.coingecko.com/api/v3/coins/list?include_platform=false" > "${filename}"
-  fi
-  fetch_error=$(_jq '.status.error_message' "${filename}")
-  if [[ "x${fetch_error}" != 'x' ]]; then
-    rm "${filename}"
-    return 1
+    coingecko "coins/list?include_platform=false" "${filename}"
+    return $?
   fi
 }
 
@@ -41,12 +50,8 @@ function get_token_prices()
   filename="${1}"; shift
   tokens="${@}"
 
-  curl --silent "https://api.coingecko.com/api/v3/simple/price?ids=${tokens// /%2C}&vs_currencies=usd&include_24hr_change=true" > "${filename}"
-  fetch_error=$(_jq '.status.error_message' "${filename}")
-  if [[ "x${fetch_error}" != 'xnull' ]]; then
-    rm "${filename}"
-    return 1
-  fi
+  coingecko "simple/price?ids=${tokens// /%2C}&vs_currencies=usd&include_24hr_change=true" "${filename}"
+  return $?
 }
 
 function show_prices()
@@ -83,11 +88,18 @@ function show_prices()
 
 warninglevel="${1}"; shift
 tokens="${@}"
-trending_tokens=$(curl --silent 'https://api.coingecko.com/api/v3/search/trending' | _jq '.coins [].item .id' | tr '\n' ' ')
 price_filename='/tmp/xfce-genmon-coingecko'
 tokens_filename="${price_filename}_tokens"
+trending_filename="${price_filename}_trending"
 
-(get_token_list "${tokens_filename}" && get_token_prices "${price_filename}" ${tokens} ${trending_tokens}) || (echo "<txt>Error while fetching CoinGecko</txt>" && exit 1)
+if (coingecko 'search/trending' "${trending_filename}"); then
+  trending_tokens=$(_jq '.coins [].item .id' "${trending_filename}" | tr '\n' ' ')
+fi
+
+if ! (get_token_list "${tokens_filename}" && get_token_prices "${price_filename}" ${tokens} ${trending_tokens}); then
+  echo "<txt>Error while fetching CoinGecko</txt>"
+  exit 1
+fi
 
 echo -e \
   "<txt>$(show_prices ${tokens})</txt>" \
